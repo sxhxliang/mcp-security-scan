@@ -67,6 +67,7 @@ pub struct InspectArgs {
     /// Seconds to wait for server connections
     #[arg(long, default_value = "10")]
     pub server_timeout: i64,
+    pub languages: Option<String>,
     pub files: Vec<String>,
 }
 

@@ -1,11 +1,12 @@
 use anyhow::Result;
 
-use colored::Colorize;
-use std::collections::HashMap;
 use crate::cli::WhitelistArgs;
 use crate::mcp_client::scan_mcp_config_file;
-use crate::mcp_types::{entity_type_to_str, Entity, Server};
+use crate::mcp_types::{Entity, Server, VerifyResult, entity_type_to_str};
 use crate::storage_file::StorageFile;
+use crate::verify_api::verify_server;
+use colored::Colorize;
+use std::collections::HashMap;
 
 pub struct MCPScanner {
     paths: Vec<String>,
@@ -34,15 +35,16 @@ impl MCPScanner {
         }
     }
 
-    pub async fn scan_files(&self, files: &Vec<String>) {
+    pub async fn scan_files(&mut self, files: &Vec<String>) {
         for file in files {
-            if let Err(e) = self.scan(file, true, true).await {
+            if let Err(e) = self.scan(file, true, false).await {
                 eprintln!("Error scanning {}: {}", file, e);
             }
         }
     }
 
-    pub async fn scan(&self, path: &str, verbose: bool, inspect_only: bool) -> Result<()> {
+    pub async fn scan(&mut self, path: &str, verbose: bool, inspect_only: bool) -> Result<()> {
+        println!("Scanning {}", path);
         let servers = match scan_mcp_config_file(path) {
             Ok(config) => config.get_servers(),
             Err(e) => {
@@ -84,16 +86,28 @@ impl MCPScanner {
             );
             for entity in &entities {
                 match entity {
-                    Entity::Tool(tool) => println!("  -  ✅ verified {}: {}", "tool".bright_yellow(), tool.name.clone().into_owned().bright_green()),
-                    Entity::Prompt(prompt) => println!("  -  ✅ verified {}: {}", "prompt".bright_yellow(), prompt.name.to_owned().bright_green()),
-                    Entity::Resource(resource) => println!("  -   ✅ verified {}: {}", "resource".bright_yellow(), resource.name.to_owned().bright_green()),
+                    Entity::Tool(tool) => println!(
+                        "  -  ✅ verified {}: {}",
+                        "tool".bright_yellow(),
+                        tool.name.clone().into_owned().bright_green()
+                    ),
+                    Entity::Prompt(prompt) => println!(
+                        "  -  ✅ verified {}: {}",
+                        "prompt".bright_yellow(),
+                        prompt.name.to_owned().bright_green()
+                    ),
+                    Entity::Resource(resource) => println!(
+                        "  -   ✅ verified {}: {}",
+                        "resource".bright_yellow(),
+                        resource.name.to_owned().bright_green()
+                    ),
                 }
-            
             }
             servers_with_entities.insert(server_name.clone(), entities.clone());
 
             if !inspect_only {
-                self.verify_and_report_entities(&server_name, &entities, verbose)?;
+                self.verify_and_report_entities(&server_name, &entities, verbose)
+                    .await?;
             }
         }
 
@@ -108,43 +122,143 @@ impl MCPScanner {
         let client = server_config.start().await?;
         let server = client.peer().clone();
         let capabilities = server.peer_info().capabilities.clone();
-        
+
         let tools = match capabilities.tools {
-            Some(_) => server.list_all_tools().await?.into_iter().map(|t| {
-                    Entity::Tool(t)
-                }).collect::<Vec<_>>(),
+            Some(_) => server
+                .list_all_tools()
+                .await?
+                .into_iter()
+                .map(|t| Entity::Tool(t))
+                .collect::<Vec<_>>(),
             None => vec![],
-            
         };
         let prompts = match capabilities.prompts {
-            Some(_) => server.list_all_prompts().await?.into_iter().map(|p| {
-                Entity::Prompt(p)
-            }).collect::<Vec<_>>(),
+            Some(_) => server
+                .list_all_prompts()
+                .await?
+                .into_iter()
+                .map(|p| Entity::Prompt(p))
+                .collect::<Vec<_>>(),
             None => vec![],
         };
         let resources = match capabilities.resources {
-            Some(_) => server.list_all_resources().await?.into_iter().map(|r| {
-                Entity::Resource(r)
-            }).collect::<Vec<_>>(),
+            Some(_) => server
+                .list_all_resources()
+                .await?
+                .into_iter()
+                .map(|r| Entity::Resource(r))
+                .collect::<Vec<_>>(),
             None => vec![],
         };
         client.cancel().await?;
         Ok((prompts, resources, tools))
     }
 
-    fn verify_and_report_entities(
-        &self,
+    async fn verify_and_report_entities(
+        &mut self,
         server_name: &str,
         entities: &Vec<Entity>,
         verbose: bool,
-    ) -> Result<()> {
-        // TODO: Implement verification and reporting logic
+    ) -> anyhow::Result<()> {
+        let (verification_result_tools, verification_result_prompts, verification_result_resources) =
+            verify_server(entities, &self.base_url).await;
+
+        let verification_results: Vec<_> = verification_result_tools
+            .into_iter()
+            .chain(verification_result_prompts)
+            .chain(verification_result_resources)
+            .collect();
+
+        if verification_results.is_empty() {
+            return Ok(());
+        }
+
+        for (entity, verified) in entities.iter().zip(verification_results) {
+            let mut additional_text = None;
+
+            // 检查实体是否变更
+            let (changed, prev_data) = self.storage_file.check_and_update(
+                server_name,
+                entity,
+                verified.value.unwrap_or(false),
+            );
+            // println!("changed: {:?}", changed);
+
+            if changed.value.unwrap() && prev_data.is_some() {
+                let prev = prev_data.unwrap();
+                additional_text = Some(format!(
+                    "Previous description({}):\n{}",
+                    prev.timestamp.format("%d/%m/%Y, %H:%M:%S"),
+                    prev.description.unwrap_or_default()
+                ));
+            }
+
+            // 检查是否在白名单中
+            let verified = if self.storage_file.is_whitelisted(entity) {
+                println!("whitelisted");
+                VerifyResult {
+                    value: Some(true),
+                    message: Some(format!(
+                        "whitelisted {}",
+                        verified.message.unwrap_or_default()
+                    )),
+                }
+            } else if !verified.value.unwrap() || changed.value.unwrap() {
+                println!("not whitelisted");
+                let hash = self
+                    .storage_file
+                    .compute_hash(Some(entity))
+                    .unwrap_or_default();
+                let message = format!(
+                    "You can whitelist this {} by running `mcp-scan whitelist {} '{}' {}`",
+                    entity_type_to_str(entity),
+                    entity_type_to_str(entity),
+                    entity.name(),
+                    hash
+                );
+
+                additional_text = match additional_text {
+                    Some(text) => Some(format!("{}\n\n{}", text, message)),
+                    None => Some(message),
+                };
+
+                VerifyResult {
+                    value: verified.value,
+                    message: verified.message,
+                }
+            } else {
+                verified
+            };
+
+            if verbose {
+                println!(
+                    "{} - {}: {}",
+                    entity_type_to_str(entity),
+                    entity.name(),
+                    if verified.value.unwrap_or(false) {
+                        "✅"
+                    } else {
+                        "❌"
+                    }
+                );
+
+                if let Some(text) = additional_text {
+                    println!("{}", text);
+                }
+            }
+        }
+
         Ok(())
     }
 
-    pub async fn inspect(&self) -> Result<(), anyhow::Error> {
+    pub async fn inspect(&mut self, files: &Vec<String>) -> Result<(), anyhow::Error> {
         println!("{}", "Inspecting configurations...".bright_blue());
         // 实现检查逻辑
+        for file in files {
+            if let Err(e) = self.scan(file, true, true).await {
+                eprintln!("Error scanning {}: {}", file, e);
+            }
+        }
         Ok(())
     }
 
@@ -178,8 +292,8 @@ impl MCPScanner {
 
     fn print_whitelist(&self) -> Result<(), anyhow::Error> {
         println!("{}", "Current Whitelist:".underline().bright_blue());
-        // for entry in &storage.whitelist {
-        //     println!("Type: {}\nName: {}\nHash: {}\n", 
+        // for (name, entry) in &self.storage_file.scanned_entities {
+        //     println!("Type: {}\nName: {}\nHash: {}\n",
         //         entry.entity_type.bright_yellow(),
         //         entry.name.bright_green(),
         //         entry.hash.bright_cyan());

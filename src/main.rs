@@ -21,7 +21,7 @@ use cli::{Cli, Commands, ScanArgs, CommonArgs};
 // 平台相关路径
 fn well_known_mcp_paths() -> Vec<String> {
     let mut paths = vec![
-        "~/.codeium/windsurf/mcp_config.json".to_string(),
+        // "~/.codeium/windsurf/mcp_config.json".to_string(),
         "~/.cursor/mcp.json".to_string(),
     ];
 
@@ -37,11 +37,11 @@ fn well_known_mcp_paths() -> Vec<String> {
             "~/Library/Application Support/Code/User/settings.json".to_string(),
         ]);
     } else if cfg!(target_os = "windows") {
-        paths.extend(vec![
-            "~/AppData/Roaming/Claude/claude_desktop_config.json".to_string(),
-            "~/.vscode/mcp.json".to_string(),
-            "~/AppData/Roaming/Code/User/settings.json".to_string(),
-        ]);
+        // paths.extend(vec![
+        //     "~/AppData/Roaming/Claude/claude_desktop_config.json".to_string(),
+        //     "~/.vscode/mcp.json".to_string(),
+        //     "~/AppData/Roaming/Code/User/settings.json".to_string(),
+        // ]);
     }
     paths
 }
@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command.unwrap_or(Commands::Scan(ScanArgs { 
         common: CommonArgs { 
-            storage_file: "~/.mcp-scan".into(), 
+            storage_file: ".mcp-scan".into(), 
             base_url: "".into()
         },
         server_timeout: 10,
@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
                 args.files
             };
             
-            let scanner = MCPScanner::new(
+            let mut scanner = MCPScanner::new(
                 &args.common.storage_file,
                 &args.common.base_url,
                 args.checks_per_server,
@@ -86,14 +86,14 @@ async fn main() -> anyhow::Result<()> {
                 args.files
             };
             
-            let scanner = MCPScanner::new(
+            let mut scanner = MCPScanner::new(
                 &args.common.storage_file,
                 &args.common.base_url,
                 args.server_timeout,
                 false,
                 args.server_timeout as usize,
             );
-            scanner.inspect().await?;
+            scanner.inspect(&files).await?;
         }
         Commands::Whitelist(args) => {
             let scanner = MCPScanner::new(

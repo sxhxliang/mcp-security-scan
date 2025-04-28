@@ -54,8 +54,8 @@ pub struct ScannedEntity {
 pub type ScannedEntities = HashMap<String, ScannedEntity>;
 
 #[derive(Debug, Clone)]
-pub struct Result<T> {
-    pub value: Option<T>,
+pub struct VerifyResult {
+    pub value: Option<bool>,
     pub message: Option<String>,
 }
 
@@ -109,6 +109,7 @@ impl MCPConfig for CursorMCPConfig {
     fn set_servers(&mut self, servers: HashMap<String, Server>) {
         self.mcp_servers = servers;
     }
+    
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -157,6 +158,8 @@ impl Server {
                 ().serve(transport).await?
             },
             Server::Stdio(server) => {
+
+                #[cfg(not(target_os = "windows"))]
                 let transport = rmcp::transport::child_process::TokioChildProcess::new(
                     tokio::process::Command::new(server.command.clone())
                         .args(server.args.clone().unwrap_or_default())
@@ -164,6 +167,16 @@ impl Server {
                         .stderr(Stdio::inherit())
                         .stdout(Stdio::inherit()),
                 )?;
+                #[cfg(target_os = "windows")]
+                let transport = rmcp::transport::child_process::TokioChildProcess::new(
+                    tokio::process::Command::new("cmd").arg("/C")
+                        .arg(server.command.clone())
+                        .args(server.args.clone().unwrap_or_default())
+                        .envs(server.env.clone().unwrap_or_default())
+                        .stderr(Stdio::inherit())
+                        .stdout(Stdio::inherit()),
+                )?;
+                
                 ().serve(transport).await?
             }
         };

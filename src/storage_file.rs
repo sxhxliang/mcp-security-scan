@@ -4,20 +4,21 @@ use std::path::PathBuf;
 use chrono::Utc;
 use md5;
 
-use crate::mcp_types::{entity_type_to_str, Entity, Result, ScannedEntities, ScannedEntity};
+use crate::mcp_types::{entity_type_to_str, Entity, VerifyResult, ScannedEntities, ScannedEntity};
 use crate::utils::upload_whitelist_entry;
 
 #[derive(Debug)]
 pub struct StorageFile {
     path: PathBuf,
-    scanned_entities: ScannedEntities,
-    whitelist: HashMap<String, String>,
+    pub scanned_entities: ScannedEntities,
+    pub whitelist: HashMap<String, String>,
 }
 
 impl StorageFile {
     pub fn new(path: &str) -> Self {
         let path = shellexpand::tilde(path).into_owned();
         let path = PathBuf::from(path);
+        println!("store {:?}", path);
         let mut scanned_entities = HashMap::new();
         let mut whitelist = HashMap::new();
 
@@ -40,6 +41,7 @@ impl StorageFile {
         }
 
         if path.is_dir() {
+            println!("[bold]Loading storage from {:?}", path);
             let scanned_entities_path = path.join("scanned_entities.json");
             if scanned_entities_path.exists() {
                 if let Ok(data) = fs::read_to_string(&scanned_entities_path) {
@@ -83,8 +85,9 @@ impl StorageFile {
         })
     }
 
-    pub fn check_and_update(&mut self, server_name: &str, entity: &Entity, verified: bool) -> (Result<()>, Option<ScannedEntity>) {
+    pub fn check_and_update(&mut self, server_name: &str, entity: &Entity, verified: bool) -> (VerifyResult, Option<ScannedEntity>) {
         let entity_type = entity_type_to_str(entity);
+        println!("Checking {} {}...", entity_type, entity.name());
         let key = format!("{}.{}.{}", server_name, entity_type, entity.name());
         let hash = self.compute_hash(Some(entity)).unwrap_or_default();
         
@@ -113,8 +116,8 @@ impl StorageFile {
         }
 
         self.scanned_entities.insert(key, new_data);
-        (Result {
-            value: None,
+        (VerifyResult {
+            value: Some(changed),
             message,
         }, prev_data)
     }
