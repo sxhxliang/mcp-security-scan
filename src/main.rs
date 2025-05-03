@@ -6,6 +6,7 @@ mod utils;
 mod verify_api;
 mod scan;
 mod cli;
+mod llm;
 
 use anyhow::Ok;
 use clap::Parser;
@@ -21,7 +22,7 @@ use cli::{Cli, Commands, ScanArgs, CommonArgs};
 // 平台相关路径
 fn well_known_mcp_paths() -> Vec<String> {
     let mut paths = vec![
-        // "~/.codeium/windsurf/mcp_config.json".to_string(),
+        "~/.codeium/windsurf/mcp_config.json".to_string(),
         "~/.cursor/mcp.json".to_string(),
     ];
 
@@ -37,11 +38,11 @@ fn well_known_mcp_paths() -> Vec<String> {
             "~/Library/Application Support/Code/User/settings.json".to_string(),
         ]);
     } else if cfg!(target_os = "windows") {
-        // paths.extend(vec![
-        //     "~/AppData/Roaming/Claude/claude_desktop_config.json".to_string(),
-        //     "~/.vscode/mcp.json".to_string(),
-        //     "~/AppData/Roaming/Code/User/settings.json".to_string(),
-        // ]);
+        paths.extend(vec![
+            "~/AppData/Roaming/Claude/claude_desktop_config.json".to_string(),
+            "~/.vscode/mcp.json".to_string(),
+            "~/AppData/Roaming/Code/User/settings.json".to_string(),
+        ]);
     }
     paths
 }
@@ -56,7 +57,9 @@ async fn main() -> anyhow::Result<()> {
     match cli.command.unwrap_or(Commands::Scan(ScanArgs { 
         common: CommonArgs { 
             storage_file: ".mcp-scan".into(), 
-            base_url: "".into()
+            base_url: "".into(),
+            llm_api_key: None, 
+            llm_api_url: Some("https://api.openai.com/v1/chat/completions".to_string()), 
         },
         server_timeout: 10,
         suppress_mcpserver_io: true,
@@ -76,6 +79,8 @@ async fn main() -> anyhow::Result<()> {
                 args.checks_per_server,
                 args.suppress_mcpserver_io,
                 args.server_timeout as usize,
+                args.common.llm_api_key,
+                args.common.llm_api_url
             );
             scanner.scan_files(&files).await;
         }
@@ -92,6 +97,8 @@ async fn main() -> anyhow::Result<()> {
                 args.server_timeout,
                 false,
                 args.server_timeout as usize,
+                args.common.llm_api_key,
+                args.common.llm_api_url
             );
             scanner.inspect(&files).await?;
         }
@@ -102,6 +109,8 @@ async fn main() -> anyhow::Result<()> {
                 1, // checks_per_server not used
                 false,
                 10 as usize,
+                args.common.llm_api_key,
+                args.common.llm_api_url
             );
 
             // if args.reset {

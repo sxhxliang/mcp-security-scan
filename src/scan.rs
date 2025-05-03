@@ -1,12 +1,15 @@
 use anyhow::Result;
+use rmcp::model;
 
 use crate::cli::WhitelistArgs;
+use crate::llm;
 use crate::mcp_client::scan_mcp_config_file;
 use crate::mcp_types::{Entity, Server, VerifyResult, entity_type_to_str};
 use crate::storage_file::StorageFile;
 use crate::verify_api::verify_server;
 use colored::Colorize;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 pub struct MCPScanner {
     paths: Vec<String>,
@@ -15,6 +18,8 @@ pub struct MCPScanner {
     storage_file: StorageFile,
     server_timeout: i64,
     suppress_mcpserver_io: bool,
+    llm_api_key: Option<String>,
+    llm_api_url: Option<String>,
 }
 
 impl MCPScanner {
@@ -24,6 +29,8 @@ impl MCPScanner {
         server_timeout: i64,
         suppress_mcpserver_io: bool,
         checks_per_server: usize,
+        llm_api_key: Option<String>,
+        llm_api_url: Option<String>,
     ) -> Self {
         Self {
             paths: Vec::new(),
@@ -32,6 +39,8 @@ impl MCPScanner {
             storage_file: StorageFile::new(storage_path),
             server_timeout,
             suppress_mcpserver_io,
+            llm_api_key,
+            llm_api_url,
         }
     }
 
@@ -66,6 +75,19 @@ impl MCPScanner {
 
         let mut servers_with_entities: HashMap<String, Vec<Entity>> = HashMap::new();
 
+        println!("LLM key{:?}", self.llm_api_key);
+        println!("LLM url {:?}", self.llm_api_url);
+        let client = llm::client::OpenAIClient::new(
+                            self.llm_api_key.clone().unwrap_or_default(), 
+                            self.llm_api_url.clone(), 
+                            None);
+        println!("LLM session initialized {:?}", client);
+
+        let mut llm_session = llm::session::LLMSession::new(
+            Arc::new(client), HashMap::new(), "Qwen/Qwen3-8B".into()
+        );
+        llm_session.add_system_prompt("/no_think 你是一个Json 数据翻译助手，将json数据中的value翻译成中文,注意，1、不要翻译json的key,只翻译value。 /no_think");
+
         for (server_name, server_config) in servers {
             let entities: Vec<Entity> = match self.check_server(&server_config).await {
                 Ok((prompts, resources, tools)) => {
@@ -97,7 +119,7 @@ impl MCPScanner {
                         prompt.name.to_owned().bright_green()
                     ),
                     Entity::Resource(resource) => println!(
-                        "  -   ✅ verified {}: {}",
+                        "  -  ✅ verified {}: {}",
                         "resource".bright_yellow(),
                         resource.name.to_owned().bright_green()
                     ),
@@ -108,6 +130,42 @@ impl MCPScanner {
             if !inspect_only {
                 self.verify_and_report_entities(&server_name, &entities, verbose)
                     .await?;
+            }else {
+                println!("{}", "Inspection mode enabled, skipping verification".bright_yellow());
+
+
+                let new_entities = entities.iter().map(|entity| match entity {
+                    Entity::Tool(tool) => {
+                        serde_json::json!({
+                            "Tool":{
+                                "name": tool.name.to_string(),
+                                "description": tool.description.as_deref().unwrap_or("")
+                            }
+                        })
+                    }
+                    Entity::Prompt(prompt) => {
+                        serde_json::json!({
+                            "Prompt":{
+                                "name": prompt.name.to_string(),
+                                "description": prompt.description.as_deref().unwrap_or("")
+                            }
+                        })
+                    }
+                    Entity::Resource(resource) => {
+                        serde_json::json!({
+                            "Resource":{
+                                "name": resource.name.to_string(),
+                                "description": resource.description.as_deref().unwrap_or("")
+                            }
+                        })
+                    }
+                }).collect::<Vec<_>>();
+
+                // println!("{:#?}", serde_json::to_string(&new_entities));
+
+                let _ = llm_session.chat(serde_json::to_string(&new_entities).unwrap()).await;
+
+
             }
         }
 

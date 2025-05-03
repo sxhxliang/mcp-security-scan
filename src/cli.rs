@@ -29,15 +29,23 @@ pub enum Commands {
     Whitelist(WhitelistArgs),
 }
 
-#[derive(Args)]
+#[derive(Parser)]
 pub struct CommonArgs {
     /// Path to store scan results and whitelist
-    #[arg(long, default_value = "~/.mcp-security-scan")]
+    #[arg(long, short = 's',  default_value = "~/.mcp-security-scan")]
     pub storage_file: String,
     
     /// Base URL for verification server
-    #[arg(long, default_value = "")]
+    #[arg(long, short = 'b',  default_value = "")]
     pub base_url: String,
+    
+    /// LLM API key (can also be set via MCP_LLM_API_KEY env var)
+    #[arg(long, short = 'k', env = "LLM_API_KEY")]
+    pub llm_api_key: Option<String>,
+    
+    /// LLM API URL (can also be set via MCP_LLM_API_URL env var)
+    #[arg(long, short = 'u',  env = "LLM_API_URL")]
+    pub llm_api_url: Option<String>,
 }
 
 #[derive(Args)]
